@@ -1,0 +1,74 @@
+pipeline {
+    agent any 
+    tools {
+        maven 'Maven'
+    }
+    stages {
+        stage('Build') {
+            steps {
+                sh '''
+                mvn clean package -DskipTests
+                '''
+            }
+        }
+        stage('Test'){
+            steps {
+                sh 'mvn test'
+            }
+        }
+        stage('Sonar'){
+            environment {
+                scanner = tool 'SONAR_SCANNER'
+            }
+            steps {
+                withSonarQubeEnv('SONAR'){
+                    sh "${scanner}/bin/sonar-scanner -e -Dsonar.host.url=http://172.17.0.4:9000 -Dsonar.projectKey=Backend -Dsonar.java.binaries=target -Dsonar.exclusions=src/test/**"
+                }
+            }
+        }
+        stage('QualityGate'){
+            steps {
+                sleep(10)
+                timeout(time:1, unit:'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+        stage('Deploy') {
+            agent {
+                // Equivalente "docker build -f Dockerfile -t backend .
+                dockerfile {
+                    filename 'Dockerfile' 
+                    dir '/var/jenkins_home/workspace/Pipeline'
+                    additionalBuildArgs  '-t backend'
+                    args '--name tasks --entrypoint="" --rm -e DATABASE_HOST="172.17.0.3" -e DATABASE_UPDATE="none" -p 8001:8001'
+                }
+            }
+            steps {
+                sh 'java -jar /app.jar'
+            }
+        }
+        stage('Deploy') {
+            steps {
+                sh '''
+                docker ps -q --filter "name=tasks" | grep -q . && docker stop tasks
+                docker build -t backend .
+                IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' new-db)
+                docker run --name tasks --rm -e DATABASE_HOST="$IP" -d -p 8001:8001 backend
+                '''
+            }
+        }
+        stage('Check'){
+            steps {
+                sleep(5)
+                sh """curl -I http://172.17.0.1:8001/todo"""
+            }
+        }
+    }
+    post {
+        always {
+            junit allowEmptyResults: true, testResults: 'target/surefire-reports/*.xml'
+            archiveArtifacts artifacts: 'target/tasks-backend.jar', followSymlinks: false, onlyIfSuccessful: true
+        }
+    }
+}
