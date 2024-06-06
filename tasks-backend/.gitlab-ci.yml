@@ -1,0 +1,69 @@
+default:
+  tags:
+    - maven
+
+cache:
+  paths:
+    - .m2/repository
+    - target/*
+
+variables:
+  MAVEN_OPTS: "-Dmaven.repo.local=$CI_PROJECT_DIR/.m2/repository"
+
+stages:
+  - build
+  - tests
+  - quality_gate
+  - build_image
+  - stop
+  - deploy
+  - check
+
+compilar:
+  stage: build
+  script:
+    - mvn clean package -DskipTests
+
+testar:
+  stage: tests
+  script:
+    - mvn test
+  artifacts:
+    when: always
+    reports:
+      junit:
+        - target/surefire-reports/TEST-*.xml
+
+qualidade:
+  stage: quality_gate
+  script:
+    - mvn verify sonar:sonar -Dsonar.qualitygate.wait=true -Dsonar.projectKey=Backend -Dsonar.java.binaries=target -Dsonar.exclusions=src/test/** -Dsonar.host.url=${SONAR_URL} -Dsonar.token=${SONAR_TOKEN}
+
+dockerizar:
+  stage: build_image
+  tags:
+    - docker
+  script:
+    - docker build -t backend .
+
+parar:
+  stage: stop
+  tags:
+    - docker
+  allow_failure: true
+  script:
+    - docker stop tasks
+
+implantar:
+  stage: deploy
+  tags:
+    - docker
+  script:
+    - docker run -d --name tasks --rm -e DATABASE_HOST="172.17.0.1" -e DATABASE_PORT="5432" -p 8001:8001 backend
+
+checkar:
+  stage: check
+  script:
+    - sleep 5
+    - curl -v http://172.17.0.1:8001
+    - echo $?
